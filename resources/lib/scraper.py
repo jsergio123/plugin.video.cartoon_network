@@ -5,7 +5,7 @@ import json
 import re
 import sys
 import urllib
-
+import urllib2
 import xbmc
 import xbmcaddon
 import xbmcgui
@@ -40,6 +40,8 @@ class myAddon(t1mAddon):
 
             for show in shows:
                 name = show.get("displaytitle", "No Title").encode("utf-8")
+                if "Ninjago" in name:
+                    name = "Lego %s" % name
                 if not any(x in name.lower() for x in blacklist):
                     context_menu = []
                     if getmeta == 'true':
@@ -96,7 +98,7 @@ class myAddon(t1mAddon):
                     name = name if episode.get("authType", "auth") == "unauth" else "[COLOR red]%s[/COLOR]" % name
                     fanart = self.addonFanart
                     thumb = episode.get("thumbnailurl", self.addonIcon)
-                    infoList = {}
+                    infoList = dict()
                     infoList['Title'] = name
                     infoList['Episode'] = episode.get("episodeNumber")
                     infoList['Season'] = episode.get("seasonNumber")
@@ -116,21 +118,22 @@ class myAddon(t1mAddon):
         html = self.getRequest(url)
         media_id = re.search('''_cnglobal\.currentVideo\.mediaId\s*=\s*["']([^"']+)''', html)
         if media_id:
-            # I will clean this up when I enable support for bitrates
             api_url = 'https://medium.ngtv.io/media/%s/desktop' % media_id.group(1)
             _html = self.getRequest(api_url)
             api_data = json.loads(_html)
             asset = api_data.get('media').get('desktop').get('bulkaes')
             _path = "/toon/%s/" % asset.get("assetId")
-            _token_url = "https://token.ngtv.io/token/token_spe?networkId=cartoonnetwork&format=json&path=%s*&appId=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhcHBJZCI6ImNuLXR2ZS13ZWItdmdyOW5wIiwicHJvZHVjdCI6InR2ZSIsIm5ldHdvcmsiOiJjbiIsInBsYXRmb3JtIjoid2ViIiwiaWF0IjoxNTI5MzYwODU3fQ.mPs2iI35riz6C5RefVyWHmOd4ezF_m3hedWMDMOaVuY" % urllib.quote_plus(_path)
-            _token = self.getRequest(_token_url)
-            _token_data = json.loads(_token)
-            token = _token_data.get("auth").get("token")
+            token = self.getVideoToken(_path)
             url = asset.get('url', asset.get('secureUrl'))
-            if url.endswith(".m3u8"):
-                source = url + "?hdnts=" + token
+            if url.endswith(".m3u8") and token:
+                source = url + token
         autoplay = xbmcaddon.Addon().getSetting("autoplay")
         if source and autoplay == 'false':
+            import cookielib
+            cookies = cookielib.LWPCookieJar()
+            handlers = [urllib2.HTTPHandler(), urllib2.HTTPSHandler(), urllib2.HTTPCookieProcessor(cookies)]
+            opener = urllib2.build_opener(*handlers)
+            urllib2.install_opener(opener)
             hls = self.getRequest(source)
             sources = re.findall('''BANDWIDTH=(\d+).*?RESOLUTION=([\dx]+).*?\n([^#\s]+)''', hls, re.I)
             sources = sorted(sources, key=lambda x: int(x[0]), reverse=True)
@@ -140,6 +143,7 @@ class myAddon(t1mAddon):
                 dialog.notification(addon_name, lang(34006).encode('utf-8'), xbmcgui.NOTIFICATION_WARNING, 3000)
                 return
             else:
+                source = source.rsplit('?', 1).pop(0)
                 u = '%s/%s' % (source.rsplit('/', 1).pop(0), sources[src][2].strip())
         elif source and autoplay == 'true':
             u = source
@@ -157,3 +161,11 @@ class myAddon(t1mAddon):
                      'Season': xbmc.getInfoLabel('ListItem.Season'), 'Episode': xbmc.getInfoLabel('ListItem.Episode')}
         item.setInfo('video', info_list)
         xbmcplugin.setResolvedUrl(int(sys.argv[1]), True, item)
+
+    def getVideoToken(self, _path):
+        token_url = "https://token.ngtv.io/token/token_spe?networkId=cartoonnetwork&format=json&path=%s*&appId=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhcHBJZCI6ImNuLXR2ZS13ZWItdmdyOW5wIiwicHJvZHVjdCI6InR2ZSIsIm5ldHdvcmsiOiJjbiIsInBsYXRmb3JtIjoid2ViIiwiaWF0IjoxNTI5MzYwODU3fQ.mPs2iI35riz6C5RefVyWHmOd4ezF_m3hedWMDMOaVuY" % urllib.quote_plus(_path)
+        token_result = self.getRequest(token_url)
+        token_data = json.loads(token_result)
+        token = token_data.get("auth").get("token")
+        token_param = "?hdnts=%s" % token if token else False
+        return token_param
